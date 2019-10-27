@@ -1,0 +1,452 @@
+---
+title: "income_RF"
+author: "Faris Dzikrur R"
+date: "22/08/2019"
+output:
+  rmdformats::html_clean:
+    highlight: kate
+---
+
+```{r setup, echo=FALSE, cache=FALSE}
+library(knitr)
+library(rmdformats)
+
+## Global options
+options(max.print="75")
+opts_chunk$set(echo=FALSE,
+	             cache=TRUE,
+               prompt=FALSE,
+               tidy=TRUE,
+               comment=NA,
+               message=FALSE,
+               warning=FALSE)
+opts_knit$set(width=75)
+```
+
+# Latar Belakang, masalah, tujuan, dan metode yang akan dipakai
+Pada LBB kali ini, saya menggunakan data Adult Census Income yang berisikan laporan sensus Amerika Serikat pada tahun 1994. Data ini akan saya gunakan untuk memprediksi dan mengetahui karakteristik warga Amerika Serikat yang memiliki penghasilan **di atas USD 50.000**. Hasil prediksi tersebut dapat digunakan oleh para pengambil keputusan dan mereka yang bekerja di bidang marketing untuk mengetahui karakter-karakter warga yang memiliki penghasilan tertentu. Adapun data yang digunakan adalah data Adult Census Income yang bisa didapatkan di [UCI Machine Learning](https://archive.ics.uci.edu/ml/datasets/census+income)
+
+Metode machine learning yang akan saya gunakan adalah **Naive-Bayes**, **Decision Tree**, dan **Random Forest**. Saya menggunakan ketiganya karena ingin membandingkan mana metode yang memiliki performa dan tingkat akurasi terbaik. 
+***
+# Baca dan inspect data
+
+Load library yang akan digunakan
+
+```{r}
+library(tidyverse) 
+library(plotly) 
+library(ggthemes) 
+library(viridis)
+library(corrplot) 
+library(gridExtra) 
+library(VIM) 
+library(lubridate) 
+library(randomForest) 
+library(partykit)
+library(knitr)
+library(rmdformats)
+library(tm)
+library(caret)
+library(e1071)
+library(rockchalk)
+```
+
+Baca data pada object bernama adult, lalu kita lihat structure dan 6 observasi awal dari data.
+
+```{r}
+adult <- read.csv("adult.csv")
+```
+
+```{r}
+str(adult)
+```
+
+Dapat dilihat bahwa kita memiliki 30.718 observasi dengan 16 variabel. Adapun 6 observasi awal dari data dapat dilihat pada tabel di bawah
+
+```{r}
+head(adult)
+```
+
+Setelah itu, kita memeriksa apakah ada missing value di data kita. Dari tabel di atas diketahui ada observasi yang berisi '?'. Kita ingin menghapus baris berisi tanda tersebut dengan cara merubahnya menjadi NA terlebih dahulu. Diketahui bahwa '?' berada di variabel workclass dan occupation.
+
+```{r}
+table(adult$workclass)
+adult[adult == "?"] <- NA
+```
+
+```{r}
+table(adult$occupation)
+```
+
+Lalu kita cek NA-nya
+```{r}
+colSums(is.na(adult))
+```
+
+```{r}
+1836/32561 *100
+1843/32561 *100
+```
+
+Karena persentase NA dalam data berkisar di 5%, maka kita membuang NA-nya.
+
+```{r}
+adult <- na.omit(adult)
+```
+***
+# Preprocessing dan Exploring Dataset
+Selanjutnya, kita akan melihat lebih jauh variabel di dalam dataset ini, termasuk persebaran datanya dan apakah variabel tersebut memiliki variance yang tinggi ataukah tidak.
+
+## Variabel Numerik
+Kita akan memeriksa variabel numerik pada data ini.
+
+### Capital Gain
+Pada bagian ini, kami akan melihat variance dari capital gain dan capital loss.
+```{r}
+hist(adult$capital.gain, col="brown", main="Capital Gain")
+```
+
+### Capital Loss
+```{r}
+hist(adult$capital.loss, col="brown", main="Capital Loss")
+```
+
+Kemudian diperiksa apakah ada warga yang mendapatkan capital gain dan capital loss di saat yang bersamaan.
+
+```{r}
+sum(adult$capital.loss > 0 & adult$capital.gain > 0)
+```
+
+Ternyata hasilnya 0, menandakan bahwa variabel capital gain dan capital loss adalah bersifat mutually exclusive (tak berhubungan) satu dengan yang lainnya. Karena keduanya pun juga mengukur besaran yang sama yaitu capital, maka untuk mensimplifikasi model, dibuatlah variabel baru bernama net.capital yang menggabungkan dua variabel tersebut.
+
+### Net Capital Gain
+```{r}
+hist(adult$capital.gain-adult$capital.loss, col="brown", main="Net Capital Gain")
+```
+
+Buat variabel baru yaitu 'net.capital'
+```{r}
+adult$net.capital <- adult$capital.gain - adult$capital.loss
+```
+
+Selanjutnya, kita akan memeriksa variabel kategorik pada data ini.
+
+## Categorical Variable
+
+### Workclass
+Kita akan mengurangi kategori pada variabel workclass dengan cara menggabungkan beberapa kategori menjadi 1 kategori agar model menjadi lebih sederhana. Prosesnya seperti yang terlihat di bawah.
+```{r}
+adult$workclass <- as.character(adult$workclass)
+
+adult$workclass[adult$workclass == "Without-pay" | adult$workclass == "Never-worked"] <- "Unemployed"
+
+adult$workclass[adult$workclass == "State-gov" | adult$workclass == "Local-gov"] <- "SL-gov"
+
+adult$workclass[adult$workclass == "Self-emp-inc" | adult$workclass == "Self-emp-not-inc"] <- "Self-employed"
+
+table(adult$workclass)
+```
+
+```{r}
+ggplot(adult, aes(x = workclass, fill = income)) + geom_bar(position="fill") + theme(axis.text.x = element_text(angle = 90)) + ggtitle("Workclass")
+```
+
+### Marital Status
+Selanjutnya, kita menyederhanakan kategori pada 'marital.status' dengan menggabungkan beberapa kategori yang bisa digabungkan. Hasilnya seperti terlihat di bawah.
+
+```{r}
+adult$marital.status <- as.character(adult$marital.status)
+
+adult$marital.status[adult$marital.status == "Married-AF-spouse" | adult$marital.status == "Married-civ-spouse" | adult$marital.status == "Married-spouse-absent"] <- "Married"
+
+adult$marital.status[adult$marital.status == "Divorced" | adult$marital.status == "Separated" | adult$marital.status == "Widowed"] <- "Not-Married"
+
+table(adult$marital.status)
+```
+
+### Native Country
+Pada variabel 'native.country', kita akan menggabungkan negara-negara dengan kontinen yang sama dan membuat kategori baru berdasarkan kontinennya. Ini dilakukan karena kategori pada variabel ini sangat banyak, yang dapat memberatkan model. 
+```{r}
+adult$native.country <- as.character(adult$native.country)
+
+north.america <- c("Canada", "Cuba", "Dominican-Republic", "El-Salvador", "Guatemala", "Haiti", "Honduras", "Jamaica", "Mexico", "Nicaragua", "Outlying-US(Guam-USVI-etc)", "Puerto-Rico", "Trinadad&Tobago", "United-States")
+
+asia <- c("Cambodia", "China", "Hong", "India", "Iran", "Japan", "Laos", "Philippines", "Taiwan", "Thailand", "Vietnam")
+
+south.america <- c("Columbia", "Ecuador", "Peru")
+
+europe <- c("England", "France", "Germany", "Greece", "Holand-Netherlands", "Hungary", "Ireland", "Italy", "Poland", "Portugal", "Scotland", "Yugoslavia")
+
+other <- c("South", "?")
+
+adult$native.country[adult$native.country %in% north.america] <- "North America"
+
+adult$native.country[adult$native.country %in% asia] <- "Asia"
+
+adult$native.country[adult$native.country %in% south.america] <- "South America"
+
+adult$native.country[adult$native.country %in% europe] <- "Europe"
+
+adult$native.country[adult$native.country %in% other] <- "Other"
+
+table(adult$native.country)
+```
+
+### Relationship
+Menggabungkan wife dan husband dalam relationship menjadi spouse
+```{r}
+adult$relationship <- combineLevels(adult$relationship, levs = c("Husband", "Wife"), "Spouse")
+```
+
+```{r}
+ggplot(adult, aes(x = relationship, fill = sex)) + geom_bar(position="fill") + theme(axis.text.x = element_text(angle = 90)) + ggtitle("Relationship and Gender")
+```
+<br><br><br><br>
+Selanjutnya, kita akan mengembalikan variabel 'native.country', 'marital.status', dan 'workclass' menjadi faktor kembali.
+```{r}
+adult$native.country <- as.factor(adult$native.country)
+adult$marital.status <- as.factor(adult$marital.status)
+adult$workclass <- as.factor(adult$workclass)
+glimpse(adult)
+```
+
+Kemudian, dilakukan pengeliminasian variabel-variabel yang memiliki variance kecil, agar model menjadi lebih akurat. Kita juga akan melakukan eliminasi terhadap variabel 'fnlwgt' karena tidak relevan.
+```{r}
+n0v <- nearZeroVar(adult)
+adult.v <- adult[,-n0v]
+glimpse(adult.v)
+
+#exclude fnlwgt
+adult.v <- adult.v[,-c(3)]
+glimpse(adult.v)
+```
+Ternyata, ada beberapa variabel yang terleminasi, seperti net.capital dan native.country yang memang memiliki variansi yang sedikit, dan hanya terpusat pada satu titik saja, seperti yang dijelaskan di atas. Pengeliminasian variabel 0 sebenarnya bisa dilakukan di awal, namun penulis ingin menunjukkan terlebih dahulu proses penggabungan kategori dan distribusi data pada tiap variabel. 
+
+
+# Cross Validation
+Bagi data menjadi train dan test untuk prediksi menggunakan metode Naive Bayes dan Decision Tree. Untuk Random Forest, maka pembagian menjadi train-test sudah otomatis dilakukan menggunakan metode K-Fold. 
+```{r}
+RNGkind(sample.kind = "Rounding")
+set.seed(100)
+index <- sample(nrow(adult.v), nrow(adult.v)*0.8)
+train_adult <- adult.v[index,]
+test_adult <- adult.v[-index,]
+```
+
+# Model {.tabset .tabset-fade .tabset-pills}
+## Model Decision Tree
+
+Metode Pertama
+
+Dilakukan pembuat model decision tree menggunakan function 'ctree()' lalu plot modelnya. Dari gambar di bawah terlihat bahwa model decision tree masih sangat kompleks dikarenakan banyaknya variabel dan kategori.
+```{r}
+model_adult <- ctree(formula = income~.,data = train_adult)
+plot(model_adult, type="simple")
+```
+
+Kemudian dilakukan prediksi model menggunakan data train dan data test.
+```{r}
+pred_adult <- predict(model_adult, train_adult)
+pred_adult2 <- predict(model_adult, test_adult)
+```
+
+Dilanjutkan dengan mengeluarkan hasil confusion matrix dan membandingkan antara data train dan data test. Dari hasil di bawah, tampak bahwa akurasi sudah berada di angka 83% yang menandakan bahwa model sudah cukup baik. Perbedaan akurasi di antara data train dan data test juga kecil yang berarti bahwa model sudah fit. 
+```{r}
+confusionMatrix(pred_adult, train_adult$income, positive = ">50K")
+confusionMatrix(pred_adult2, test_adult$income, positive = ">50K")
+```
+
+Kemudian, dilakukan prunning untuk menyederhanakan node/batang pohon yang kita buat.
+```{r}
+model_adult2 <- ctree(formula = income~.,data = train_adult, control = ctree_control(mincriterion = 0.95))
+plot(model_adult2, type="simple")
+```
+
+Dapat pula dilakukan evaluasi model yang lain menggunakan ROC dan AUC. ROC dilakukan dengan melakukan plot antara true positive rate dan false positive rate. 
+
+```{r}
+library(ROCR)
+pred_dcprob <- predict(model_adult, test_adult, type="prob")
+pred_roc <- prediction(pred_dcprob[,2], test_adult[,11])
+perf <- performance(pred_roc, "tpr", "fpr")
+plot(perf)
+```
+
+```{r}
+library(pROC)
+auc <- performance(pred_roc, "auc")
+auc <- as.numeric(auc@y.values)
+auc
+```
+Tampak bahwa nilai auc adalah 87%, lebih tinggi daripada nilai akurasi yang sebesar 83%.
+
+Metode kedua
+
+Model decision tree ini menggunakan library rpart dan rattle. Metode ini menghasilkan pohon yang lebih sederhana tanpa harus dilakukan prunning terlebih dahulu.
+
+```{r}
+library(rpart)
+library(rpart.plot)
+library(rattle)
+```
+Pertama kita membuat model decision tree
+```{r}
+modeldt_alt <- rpart(income~., data = train_adult)
+```
+Lalu, model tersebut diplot. 
+```{r}
+prp(modeldt_alt, type=2, extra=4)
+```
+Tampak bahwa relationship merupakan variabel yang paling penting dalam melakukan prediksi menggunakan decision tree. 
+
+```{r}
+asRules(modeldt_alt)
+```
+
+Selanjutnya, dilakukan prediksi menggunakan confusion matrix dan didapatkan akurasi sebesar 82%. Ternyata akurasi yang didapatkan lebih rendah dari decision tree metode pertama.
+```{r}
+pred_class <- predict(modeldt_alt, test_adult, type="class")
+treeaccu <- confusionMatrix(pred_class, test_adult$income, positive = ">50K")$overall[1]
+treeaccu
+```
+
+Dilakukan pula prediksi menggunakan ROC dan AUC dan didapatkan akurasi sebesar 82%. 
+```{r}
+pred_prob <- predict(modeldt_alt, test_adult)
+
+p_test_2 <- prediction(pred_prob[,2], test_adult$income)
+
+perf_3 <- performance(p_test_2, "tpr", "fpr")
+
+plot(perf_3, colorize=T)
+
+performance(p_test_2, "auc")@y.values
+```
+
+## Naive Bayes
+Penulis akan coba membuat model dari data ini menggunakan metode Naive Bayes. Metode ini lebih bagus digunakan pada variabel bertipe numerik, namun dapat pula digunakan pada variabel kategorik, dengan konsekuensi berkurangnya akurasi model. Pada LBB ini, penulis akan memasukkan pula variabel kategori untuk memeriksa dan membandingkan tingkat akurasinya dengan metode lain. Di bawah ini adalah proses pembuatan model, prediksi, dan perbandingan confusion matrix antara data train dengan data test.
+```{r}
+Model_Adult_Naive <- naiveBayes(income~., train_adult, laplace=1)
+
+pred_adult_naive <- predict(Model_Adult_Naive, newdata = test_adult, type="class")
+
+pred_adult_naive_2 <- predict(Model_Adult_Naive, newdata = train_adult, type="class")
+
+confusionMatrix(pred_adult_naive, test_adult$income, positive=">50K")
+
+confusionMatrix(pred_adult_naive_2, train_adult$income, positive=">50K")
+```
+Dari hasil di atas, kita dapat lihat bahwa tidak terjadi over fitting pada model dikarenakan akurasi data train kurang lebih sama dengan akurasi data test.
+
+Selanjutnya, hasil prediksi confusion matrix diassign dalam satu object bernama 'nbaccu' agar dapat diplot perbandingannya dengan metode lain.
+```{r}
+nbaccu <- confusionMatrix(pred_adult_naive, test_adult$income, positive=">50K")$overall[1]
+nbaccu
+```
+
+Dilakukan pula evaluasi menggunakan ROC.
+```{r}
+pred_test_prob <- predict(Model_Adult_Naive, test_adult, type="raw")
+p_test <- prediction(pred_test_prob[,2], test_adult$income)
+perf_2 <- performance(p_test, "tpr", "fpr")
+plot(perf_2, colorize=F)
+```
+
+Tampak di bawah bahwa hasil akurasi menggunakan AUC lebih tinggi dibandingkan confusion matrix, yaitu sebesar 0.88%. 
+```{r}
+library(pROC)
+auc_2 <- performance(p_test,"auc")
+auc_2 <- as.numeric(auc_2@y.values)
+auc_2
+```
+
+
+## Random Forest
+
+Metode Pertama
+
+Metode terakhir yang digunakan adalah Random Forest. Penulis akan menggunakan dua metode random forest dengan function yang berbeda. Kemudian hasil akurasi prediksinya akan dibandingkan dengan metode decision tree dan naive bayes. 
+
+Penulis menggunakan library 'randomForest'
+```{r}
+library(randomForest)
+```
+
+Dibuat model menggunakan data train dan prediksi menggunakan data test.
+```{r}
+rf.income <- randomForest(income~., data=train_adult, importance = TRUE)
+print(rf.income)
+
+rf.pred <- predict(rf.income, newdata=test_adult, type="class")
+```
+Dapat dilihat pada model di atas bahwa OOB sebesar 16.62%, artinya sebanyak 83.38% dari sampel OOB dapat diklasifikasikan dengan benar oleh model random forest. Jumlah pohon yang digunakan sebanyak 500 pohon. 
+
+Selanjutnya kita akan melakukan plot pada OOB.
+```{r}
+oob.error.data <- data.frame(
+  Trees=rep(1:nrow(rf.income$err.rate), times=3),
+  Type=rep(c("OOB", "<=50K", ">50K"), each=nrow(rf.income$err.rate)),
+  Error=c(rf.income$err.rate[,"OOB"],
+    rf.income$err.rate[,"<=50K"],
+    rf.income$err.rate[,">50K"]))
+ 
+ggplot(data=oob.error.data, aes(x=Trees, y=Error)) +
+  geom_line(aes(color=Type))
+```
+Pada grafik di atas, garis hijau menunjukkan rasio eror ketika mengklasifikasi >50K, garis merah menunjukkan rasio eror ketika mengklasifikasi <=50K, dan garis biru menunjukkan rasio eror OOB secara keseluruhan. Secara umum, kita lihat bahwa rasio eror menurun ketika jumlah pohon bertambah. 
+
+Selanjutnya, kita akan melihat apakah jumlah variabel pada tiap nodes pada pohon (mtry) sudah optimal ataukah belum. Pada model ini, model menyatakan mtry yang optimal adalah 3. Pembuktiannya seperti yang tampak di bawah.
+```{r}
+oob.values <- vector(length=10)
+for(i in 1:10) {
+  temp.model <- randomForest(income ~ ., data=train_adult, mtry=i, ntree=500)
+  oob.values[i] <- temp.model$err.rate[nrow(temp.model$err.rate),1]
+}
+oob.values
+```
+Diketahui dari hasil mtry di atas bahwa OOB terendah didapat ketika mtry=2.
+
+Kemudian hasil akurasi prediksi confusion matrix diassign pada object 'rfAccu'. Akurasi pada model ini pada angka 83%
+```{r}
+rfAccu<-confusionMatrix(rf.pred,test_adult$income)$overall[1]
+
+print(rfAccu)
+```
+
+Dari model ini kita dapat melihat mana saja variabel-variabel yang penting dengan menggunakan 'varImpPLot()'
+```{r}
+varImpPlot(rf.income)
+```
+
+Dilakukan pula evaluasi menggunakan metode ROC dan AUC dan
+```{r}
+pred_prob_rf <- predict(rf.income, test_adult, type="prob")
+p_test_rf <- prediction(pred_prob_rf[,2], test_adult$income)
+perf_4 <- performance(p_test_rf, "tpr", "fpr")
+plot(perf_4, colorize=F)
+```
+
+Tampak dari hasil AUC di bawah bahwa akurasinya berada pada angka 87%, lebih tinggi dari akurasi pada confusionmatrix.
+```{r}
+auc_3 <- performance(p_test_rf,"auc")
+auc_3 <- as.numeric(auc_3@y.values)
+auc_3
+```
+***
+# Performance Comparison
+Pada bagian akhir ini, kita akan membuat plot untuk membandingkan nilai akurasi yang didapatkan dari model menggunakan Naive Bayes, Decision Tree, dan Random Forest. Tampak bahwa Random Forest memiliki nilai akurasi tertinggi, diikuti dengan Decision Tree dan Naive Bayes. Sudah dapat diduga bahwa Naive Bayes memiliki tingkat akurasi terendah karena kita memasukkan pula variabel kategori ke dalam model Naive Bayes.
+```{r}
+Accuracy<-data.frame(Model=c('Naive Bayes','Decision Tree','Random Forest'),Accuracy=c(nbaccu,treeaccu,rfAccu))
+gg<-ggplot(Accuracy,aes(x=Model,y=Accuracy,fill=Model))+geom_bar(stat = 'identity')+theme_bw()+ggtitle('Accuracies of Models')
+print(gg)
+```
+
+
+
+
+
+
+
+
+
+
